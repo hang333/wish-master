@@ -38,6 +38,9 @@ export async function onRequest(context) {
 
   if (context.request.method === 'OPTIONS') return new Response(null, { headers: responseHeaders });
 
+  // DEBUG 模式：强制触发 402 额度不足逻辑
+  const DEBUG_FORCE_402 = false; 
+
   try {
     const requestData = await context.request.json();
     const userInput = requestData.wish || '';
@@ -45,6 +48,25 @@ export async function onRequest(context) {
 
     if (!userInput.trim()) {
       return new Response(JSON.stringify({ error: '愿望内容不能为空' }), { status: 400, headers: responseHeaders });
+    }
+
+    if (DEBUG_FORCE_402) {
+      return new Response(JSON.stringify({
+        status: 'quota_exceeded',
+        message: '许愿器额度不足(DEBUG)',
+        prompt: `# CONTEXT #
+
+你将会收到用户的愿望。在满足愿望的前提下找到漏洞，使得用户的许愿得不到预期的利益。
+
+# OBJECTIVE #
+
+回复一个愿望实现的场景，完全满足愿望但结果和预想完全不同且没有收益（基于用户愿望中的逻辑缺陷或诡辩）。
+
+# STYLE & TONE #
+
+幽默、富有同情心，非常擅长找语言漏洞。#
+以下内容是用户的愿望：<愿望开始>${userInput}<愿望结束>`
+      }), { status: 402, headers: responseHeaders });
     }
 
     const openai = new OpenAI({ baseURL: deepseekApiBaseUrl, apiKey: deepseekApiKey });
@@ -84,7 +106,7 @@ export async function onRequest(context) {
 1.  **人性欲望**：
     * 极度的贪婪（“我要世界首富”、“我要所有人都听我的”）。
     * 虚荣与嫉妒（“希望比前任过得好”、“希望讨厌的人出丑”）。
-    * 懒惰与逃避（“永远不想工作”、“天上掉馅饼”）。
+    * 懒惰与逃避（“永远不想工作”、“天上掉饼”）。
 2.  **正常的地名/国家提及**：
     * 正常的旅游、留学、居住愿望（“我想去日本定居”、“想当美国总统” -> 虽涉及政治职位但作为愿望本身属于个人野心，允许，交由系统讽刺）。
 3.  **一般的成人向/情感愿望**：
@@ -105,14 +127,36 @@ export async function onRequest(context) {
   "wish": "如果为allow：在此处复述用户的愿望，去除无关的语气词；如果为block：留空"
 }
 `;
-    // 关键修复：执行替换操作
     const finalAuditPrompt = auditPromptTemplate.replace('{{USER_TEXT}}', userInput);
 
-    const auditCompletion = await openai.chat.completions.create({
-      messages: [{ role: "system", content: finalAuditPrompt }],
-      model: "deepseek-chat",
-      response_format: { type: "json_object" }
-    });
+    let auditCompletion;
+    try {
+      auditCompletion = await openai.chat.completions.create({
+        messages: [{ role: "system", content: finalAuditPrompt }],
+        model: "deepseek-chat",
+        response_format: { type: "json_object" }
+      });
+    } catch (e) {
+      if (e.status === 402) {
+        return new Response(JSON.stringify({
+          status: 'quota_exceeded',
+          message: '许愿器额度不足',
+          prompt: `# CONTEXT #
+
+你将会收到用户的愿望。在满足愿望的前提下找到漏洞，使得用户的许愿得不到预期的利益。
+
+# OBJECTIVE #
+
+回复一个愿望实现的场景，完全满足愿望但结果和预想完全不同且没有收益（基于用户愿望中的逻辑缺陷或诡辩）。
+
+# STYLE & TONE #
+
+幽默、富有同情心，非常擅长找语言漏洞。#
+以下内容是用户的愿望：<愿望开始>${userInput}<愿望结束>`
+        }), { status: 402, headers: responseHeaders });
+      }
+      throw e;
+    }
 
     const auditResult = JSON.parse(auditCompletion.choices[0].message.content);
 
@@ -137,11 +181,23 @@ export async function onRequest(context) {
 }
 以下内容是用户的愿望：<愿望开始>${auditResult.wish}<愿望结束>`;
 
-    const genCompletion = await openai.chat.completions.create({
-      messages: [{ role: "system", content: generationPrompt }],
-      model: "deepseek-chat",
-      response_format: { type: "json_object" }
-    });
+    let genCompletion;
+    try {
+      genCompletion = await openai.chat.completions.create({
+        messages: [{ role: "system", content: generationPrompt }],
+        model: "deepseek-chat",
+        response_format: { type: "json_object" }
+      });
+    } catch (e) {
+      if (e.status === 402) {
+        return new Response(JSON.stringify({
+          status: 'quota_exceeded',
+          message: '许愿器额度不足',
+          prompt: generationPrompt
+        }), { status: 402, headers: responseHeaders });
+      }
+      throw e;
+    }
 
     const genResult = JSON.parse(genCompletion.choices[0].message.content);
 

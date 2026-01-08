@@ -6,17 +6,19 @@ import HeaderLogo from '../components/HeaderLogo.vue';
 import WishInput from '../components/WishInput.vue';
 import StepFlow from '../components/StepFlow.vue';
 import WishResultCard from '../components/WishResultCard.vue';
+import WishQuotaErrorCard from '../components/WishQuotaErrorCard.vue';
 import AppFooter from '../components/AppFooter.vue';
 
 // 路由
 const router = useRouter();
 
 // 状态管理
-// 0: 输入愿望, 1: 审查愿望(3秒), 2: 正在构建现实/钻漏洞(API请求期间), 3: 展示结果
+// 0: 输入愿望, 1: 审查愿望(3秒), 2: 正在构建现实/钻漏洞(API请求期间), 3: 展示结果, 4: 额度不足
 const currentStep = ref(0); 
 const wishText = ref('');
 const isLoading = ref(false);
 const error = ref(null);
+const quotaErrorPrompt = ref('');
 
 const { refundEnergy, decreaseStability, recoverStability } = useWishEnergy();
 
@@ -30,6 +32,7 @@ const wishResult = reactive({
  * 处理愿望提交逻辑 - 加入了“恶意”延迟版
  */
 async function handleWishSubmit(wish) {
+  wishText.value = wish;
   // 1. 开始：进入【审查阶段】
   // 此时 StepFlow 显示第一步：正在扫描灵魂签署痕迹...
   currentStep.value = 1; 
@@ -53,6 +56,14 @@ async function handleWishSubmit(wish) {
       body: JSON.stringify({ wish })
     });
     
+    if (response.status === 402) {
+      const data = await response.json();
+      quotaErrorPrompt.value = data.prompt;
+      refundEnergy(); // 额度不足不扣能量
+      currentStep.value = 4;
+      return;
+    }
+
     if (!response.ok) {
       throw new Error(`因果连接中断: ${response.status}`);
     }
@@ -102,6 +113,7 @@ function handleRestart() {
   error.value = null;
   wishResult.confirmed_wish = '';
   wishResult.realization_scenario = '';
+  quotaErrorPrompt.value = '';
 }
 </script>
 
@@ -124,9 +136,17 @@ function handleRestart() {
         <StepFlow :current-step="currentStep" />
       </div>
       
-      <div v-else class="result-section" key="result">
+      <div v-else-if="currentStep === 3" class="result-section" key="result">
         <WishResultCard 
           :sign-data="wishResult" 
+          @restart="handleRestart"
+        />
+      </div>
+
+      <div v-else-if="currentStep === 4" class="result-section" key="quota-error">
+        <WishQuotaErrorCard 
+          :original-wish="wishText"
+          :copy-text="quotaErrorPrompt"
           @restart="handleRestart"
         />
       </div>
